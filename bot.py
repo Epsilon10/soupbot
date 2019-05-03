@@ -14,6 +14,7 @@ from core.context import Context
 from core.utils import DotDict
 from core.paginator import PaginatorSession
 
+import psutil
 
 
 class SoupBot(commands.Bot):
@@ -24,6 +25,7 @@ class SoupBot(commands.Bot):
         self._db_pool = None
         self.loop = uvloop.new_event_loop()
         self.debug = debug
+        self.process = psutil.Process()
         self._db_pool = await asyncpg.create_pool(dsn=self.config.db_dsn, user=self.config.db_user, command_timeout=60, loop=self.loop)
         self._load_extensions()
     
@@ -85,15 +87,21 @@ class SoupBot(commands.Bot):
         channel = message.channel
         if message.author.bot:
             return
-        if ctx.command is not None:
-            self.log_command(ctx)
-        self.process_commands(message)
+        await self.process_commands(message)
     
     async def on_ready(self):
-        await bot.change_presence(activity=discord.Game(f"with {len(bot.guilds)} servers | -help | {version}"), afk=True)
-        self.log_start_up()
+        await self.change_presence(activity=discord.Game(f"with {len(self.guilds)} servers | -help | {version}"), afk=True)
+        await self.log_start_up()
 
     ## Misc utilitiees ##
+
+    async def process_commands(self, message):
+        '''Utilises the Context subclass of discord.Context'''
+        ctx = await self.get_context(message, cls=Context)
+        if ctx.command is None:
+            return
+        log_command(ctx)
+        await self.invoke(ctx)
 
     async def log_command(self, ctx):
         em = discord.Embed()
@@ -104,9 +112,20 @@ class SoupBot(commands.Bot):
     
     async def log_start_up(self):
         em = discord.Embed()
+        channels = sum(1 for g in self.guilds for _ in g.channels)
         em.title = 'Soupbot started!'
-        em.add_field(name='**Guilds**', value=str(len(self.guilds)))
-        em.add_field(name='**Users', value=str(len(self.users)))
+        em.add_field(name='Latency', value=f'{self.ws.latency*1000:.2f} ms')
+        em.add_field(name='Guilds', value=len(self.guilds))
+        em.add_field(name='Channels', value=f'{channels} total')
+        memory_usage = self.process.memory_full_info().uss / 1024**2
+        cpu_usage = self.process.cpu_percent() / psutil.cpu_count()
+        em.add_field(name='RAM Usage', value=f'{memory_usage:.2f} MiB')
+        em.add_field(name='CPU Usage',value=f'{cpu_usage:.2f}% CPU')
+        em.add_field(name='Commands Run', value=sum(self.commands_used.values()))
+        em.add_field(name='Messages', value=self.messages_sent)
+        em.add_field(name='Github', value='[Click Here](https://github.com/Epsilon10/soupbot)')
+        em.add_field(name='Invite', value=f'[Click Here]({discord.utils.oauth_url(self.user.id)})')
+        em.set_footer(text=f'Bot ID: {self.user.id}')
         await self.log_channel.send(embed=em)
     
     def format_cmd_help(self, ctx, cmd):
@@ -136,6 +155,28 @@ class SoupBot(commands.Bot):
             cmds += f'`{ctx.prefix + c.name:<{max_length}} '
             cmds += f'{c.short_doc:<{max_length}}`\n'
         em.add_field(name='Commands', value=cmds)
+
+        return em
+    
+    def format_bot_help(self, ctx):
+        signatures = []
+        fmt = ''
+        commands = []
+        for cmd in self.commands:
+            if not cmd.hidden:
+                if type(cmd.instance).__name__ == 'NoneType':
+                    commands.append(cmd)
+                    signatures.append(len(cmd.name) + len(ctx.prefix))
+        max_length = max(signatures)
+        abc = sorted(commands, key=lambda x: x.name)
+        for c in abc:
+            fmt += f'`{ctx.prefix + c.name:<{max_length}} '
+            fmt += f'{c.short_doc:<{max_length}}`\n'
+        em = discord.Embed(title='Bot', color=discord.Color.red())
+        em.description = '*Bot related commands*'
+        em.add_field(name='Commands', value=fmt)
+
+        return em
     
     ## Bot related commands ##
 
@@ -148,9 +189,26 @@ class SoupBot(commands.Bot):
         await ctx.send(embed=em)
         
     @commands.command()
-    async def help(self, ctx):
-        pass
-
+    async def help(self, ctx, *, cmd: str=None):
+        if cmd is not None:
+            cog = self.get_cog(cmd.replace(' ', '_').title())
+            _cmd = self.get_command(cmd)
+            if cog is not None:
+                em = self.format_cog_help(ctx, cog)
+            elif _cmd is not None:
+                em = self.format_cmd_help(ctx, _cmd)
+            else:
+                return await ctx.send('No commands found.')
+            return await ctx.send(embed=em)
+        pages = []
+        for cog in self.cogs.values():
+            em = self.format_cog_help(ctx, cog)
+            pages.append(em)
+        em = self.format_bot_help(ctx)
+        pages.append(em)
+        paginator_session =  PaginatorSession(ctx, footer=f'Type {ctx.prefix}help command for more info on a command.', pages=pages)
+        await paginator_session.run()
+        
 if __name__ == "__main__":
     bot = SoupBot()
     bot.run(bot.token)
