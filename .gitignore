@@ -3,3 +3,5 @@ include/
 lib/
 pyvenv.cfg
 data/config.json
+cogs/__pycache__
+core/__pycache__

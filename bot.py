@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+import datetime
 
 import discord
 from discord.ext import commands
@@ -12,33 +12,43 @@ import os
 
 from core.context import Context
 from core.utils import DotDict
+from core import utils
 from core.paginator import PaginatorSession
 
 import psutil
+import inspect
+import traceback
+import json
 
+extensions = [x.replace('.py', '') for x in os.listdir('cogs') if x.endswith('.py')]
 
 class SoupBot(commands.Bot):
     def __init__(self, debug=False):
-        super().__init__(command_prefix=None)
+        super().__init__(command_prefix='-')
         self._session = None
-        self._config = {}
+        self._config = None
         self._db_pool = None
-        self.loop = uvloop.new_event_loop()
         self.debug = debug
         self.process = psutil.Process()
-        self._db_pool = await asyncpg.create_pool(dsn=self.config.db_dsn, user=self.config.db_user, command_timeout=60, loop=self.loop)
-        self._load_extensions()
+        self.timed_tasks = []
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+        self._db_pool = None
+        
+        self.remove_command('help')
+
+        super().load_extension('cogs.general')
     
     @property
     def config(self):
-        if config is None:
-            with open('config.json') as f:
+        if self._config is None:
+            with open('./data/config.json') as f:
                 self._config = DotDict(json.load(f))
         return self._config
-
+    
     @property
     def db_pool(self):
-        return self._db_pool
+        #return self._db_pool
+        return None
     
     @property
     def session(self):
@@ -75,13 +85,14 @@ class SoupBot(commands.Bot):
         if isinstance(error, commands.CommandNotFound):  # fails silently
             pass
         elif isinstance(error, send_help):
-            _help = await send_cmd_help(ctx)
+            _help = await self.send_cmd_help(ctx)
             await ctx.send(embed=_help)
         elif isinstance(error, commands.CommandOnCooldown):
             await ctx.send(f'This command is on cooldown. Please wait {error.retry_after:.2f}s')
-    
         elif isinstance(error, commands.MissingPermissions):
             await ctx.send('You do not have the permissions to use this command.')
+        else:
+            error_traceback = traceback.format_exc()
 
     async def on_messsage(self, message):
         channel = message.channel
@@ -90,8 +101,18 @@ class SoupBot(commands.Bot):
         await self.process_commands(message)
     
     async def on_ready(self):
-        await self.change_presence(activity=discord.Game(f"with {len(self.guilds)} servers | -help | {version}"), afk=True)
+        await self.change_presence(activity=discord.Game(f"with {len(self.guilds)} servers | -help"), afk=True)
         await self.log_start_up()
+        print(r"""
+                                ___.           __   
+        __________  __ ________\_ |__   _____/   |_ _
+        /  ___/  _ \|  |  \____ \ | __ \ /  _ \   __\
+        \___ (  <_> )  |  /  |_> > \_\ (  <_> )   |  
+        /____  >____/|____/|   __/|___  /\____/|__|  
+                           |__|                         
+            """
+        )
+        print('\nSoupbot online!')
 
     ## Misc utilitiees ##
 
@@ -100,14 +121,22 @@ class SoupBot(commands.Bot):
         ctx = await self.get_context(message, cls=Context)
         if ctx.command is None:
             return
-        log_command(ctx)
+        await self.log_command(ctx)
         await self.invoke(ctx)
 
+    async def log_error(self, error_str):
+        em = discord.Embed(color=discord.Color.red())
+        em.title = f'{ctx.prefix}{ctx.command.name}'
+        em.description = f'```{error_str}```'
+        em.set_footer(text=f'Invoked at {str(datetime.datetime.utcnow())}')
+        await self.log_channel.send(embed=em)
+        await self.log_channel.send(f'<@{self.get_user(self.config.owner_id).id}>')
+
     async def log_command(self, ctx):
-        em = discord.Embed()
+        em = discord.Embed(color=discord.Color.green())
         em.title = f'{ctx.prefix}{ctx.command.name}'
         em.description = f'Invoked by {ctx.message.author.id}'
-        em.set_footer(text=f'Invoked at {str(datetime.datetime.now())}'))
+        em.set_footer(text=f'Invoked at {str(datetime.datetime.utcnow())}')
         await self.log_channel.send(embed=em)
     
     async def log_start_up(self):
@@ -121,8 +150,6 @@ class SoupBot(commands.Bot):
         cpu_usage = self.process.cpu_percent() / psutil.cpu_count()
         em.add_field(name='RAM Usage', value=f'{memory_usage:.2f} MiB')
         em.add_field(name='CPU Usage',value=f'{cpu_usage:.2f}% CPU')
-        em.add_field(name='Commands Run', value=sum(self.commands_used.values()))
-        em.add_field(name='Messages', value=self.messages_sent)
         em.add_field(name='Github', value='[Click Here](https://github.com/Epsilon10/soupbot)')
         em.add_field(name='Invite', value=f'[Click Here]({discord.utils.oauth_url(self.user.id)})')
         em.set_footer(text=f'Bot ID: {self.user.id}')
@@ -178,40 +205,34 @@ class SoupBot(commands.Bot):
 
         return em
     
+    def load_extension(self, path):
+        members = inspect.getmembers(cog)
+        for name, member in members:
+            if name.startswith('on_'):
+                self.add_listener(member, name)
+        try:
+            super().load_extension(f'{path}')
+        except Exception as e:
+            print(f'LoadError: {cog}\n{type(e).__name__}: {e}')
+
+    def load_extensions(self, cogs, path='cogs.'):
+        for cog in cogs:
+            members = inspect.getmembers(cog)
+            for name, member in members:
+                if name.startswith('on_'):
+                    self.add_listener(member, name)
+            try:
+                super().load_extension(f'{path}{cog}')
+            except Exception as e:
+                print(f'LoadError: {cog}\n{type(e).__name__}: {e}')
+    
     ## Bot related commands ##
 
-    @commands.command()
-    async def ping(self, ctx):
-        '''Pong! Returns your websocket latency'''
-        em = discord.Embed()
-        em.title ='Pong! Websocket Latency:'
-        em.description = f'{self.ws.latency * 1000:.4f} ms'
-        await ctx.send(embed=em)
-        
-    @commands.command()
-    async def help(self, ctx, *, cmd: str=None):
-        if cmd is not None:
-            cog = self.get_cog(cmd.replace(' ', '_').title())
-            _cmd = self.get_command(cmd)
-            if cog is not None:
-                em = self.format_cog_help(ctx, cog)
-            elif _cmd is not None:
-                em = self.format_cmd_help(ctx, _cmd)
-            else:
-                return await ctx.send('No commands found.')
-            return await ctx.send(embed=em)
-        pages = []
-        for cog in self.cogs.values():
-            em = self.format_cog_help(ctx, cog)
-            pages.append(em)
-        em = self.format_bot_help(ctx)
-        pages.append(em)
-        paginator_session =  PaginatorSession(ctx, footer=f'Type {ctx.prefix}help command for more info on a command.', pages=pages)
-        await paginator_session.run()
+    
         
 if __name__ == "__main__":
     bot = SoupBot()
-    bot.run(bot.token)
+    bot.run("NTc0MDQ5NDExMDkzNjI2ODgy.XMzvSA.G3zxJC_HHqBXSoQiBhjm_sSX9oQ")
 
 
     

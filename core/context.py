@@ -23,7 +23,7 @@ class Context(commands.Context):
         super().__init__(**kwargs)
         self.db_pool = self.bot.db_pool
         self._db = None
-        self.config = self.bot.config
+        #self.config = self.bot.config
     
     @property
     def session(self):
