@@ -36,7 +36,7 @@ class SoupBot(commands.Bot):
         
         self.remove_command('help')
 
-        super().load_extension('cogs.general')
+        #super().load_extension('cogs.general')
     
     @property
     def config(self):
@@ -232,7 +232,7 @@ class SoupBot(commands.Bot):
         
 if __name__ == "__main__":
     bot = SoupBot()
-    bot.run("NTc0MDQ5NDExMDkzNjI2ODgy.XMzvSA.G3zxJC_HHqBXSoQiBhjm_sSX9oQ")
+    bot.run(bot.token)
 
 
     
