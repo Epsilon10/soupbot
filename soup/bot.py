@@ -10,17 +10,15 @@ import asyncpg
 import uvloop
 import os
 
-from core.context import Context
-from core.utils import DotDict
-from core import utils
-from core.paginator import PaginatorSession
+from soup.core.utils import DotDict
+from soup.core import utils
+from soup.core.paginator import PaginatorSession
 
 import psutil
 import inspect
 import traceback
 import json
 
-extensions = [x.replace('.py', '') for x in os.listdir('cogs') if x.endswith('.py')]
 
 class SoupBot(commands.Bot):
     def __init__(self, debug=False):
@@ -35,21 +33,19 @@ class SoupBot(commands.Bot):
         self._db_pool = None
         
         self.remove_command('help')
-
-        #super().load_extension('cogs.general')
-    
     @property
     def config(self):
         if self._config is None:
-            with open('./data/config.json') as f:
+            with open('soup/data/config.json') as f:
                 self._config = DotDict(json.load(f))
         return self._config
     
     @property
     def db_pool(self):
-        #return self._db_pool
-        return None
-    
+        if self.db_pool is None:
+            self.db_pool = asyncpg.create_pool(dsn=self.config.dsn, user=self.config.db_user)
+        return self.db_pool
+
     @property
     def session(self):
         if self._session is None:
@@ -113,12 +109,15 @@ class SoupBot(commands.Bot):
             """
         )
         print('\nSoupbot online!')
+    
+    async def on_guild_join(self, guild):
+        pass
 
     ## Misc utilitiees ##
 
     async def process_commands(self, message):
         '''Utilises the Context subclass of discord.Context'''
-        ctx = await self.get_context(message, cls=Context)
+        ctx = await self.get_context(message, cls=discord.Context)
         if ctx.command is None:
             return
         await self.log_command(ctx)
@@ -158,10 +157,11 @@ class SoupBot(commands.Bot):
     def format_cmd_help(self, ctx, cmd):
         color = discord.Color.red()
         em = discord.Embed(color=color, description=cmd.help)
+        print(cmd.signature)
         if hasattr(cmd, 'invoke_without_command') and cmd.invoke_without_command:
             em.title = f'`Usage: {ctx.prefix}{cmd.signature}`' 
         else:
-            em.title = f'`{ctx.prefix}{cmd.signature}`'
+            em.title = f'`{ctx.prefix}{cmd.name}{cmd.signature}`'
         return em
     
     def format_cog_help(self, ctx, cog):
@@ -170,6 +170,7 @@ class SoupBot(commands.Bot):
         em = discord.Embed(color=color, description=f'*{inspect.getdoc(cog)}*')
         em.title = type(cog).__name__.replace('_', ' ')
         cc = []
+        print('fasffsd')
         for cmd in self.commands:
             if not cmd.hidden:
                 if cmd.instance is cog:
@@ -190,8 +191,10 @@ class SoupBot(commands.Bot):
         fmt = ''
         commands = []
         for cmd in self.commands:
+            print(type(cmd.instance).__name__)
             if not cmd.hidden:
-                if type(cmd.instance).__name__ == 'NoneType':
+                if type(cmd.instance).__name__.lower() == 'general':
+                    print('thotiana')
                     commands.append(cmd)
                     signatures.append(len(cmd.name) + len(ctx.prefix))
         max_length = max(signatures)
@@ -204,35 +207,10 @@ class SoupBot(commands.Bot):
         em.add_field(name='Commands', value=fmt)
 
         return em
-    
-    def load_extension(self, path):
-        members = inspect.getmembers(cog)
-        for name, member in members:
-            if name.startswith('on_'):
-                self.add_listener(member, name)
-        try:
-            super().load_extension(f'{path}')
-        except Exception as e:
-            print(f'LoadError: {cog}\n{type(e).__name__}: {e}')
 
-    def load_extensions(self, cogs, path='cogs.'):
-        for cog in cogs:
-            members = inspect.getmembers(cog)
-            for name, member in members:
-                if name.startswith('on_'):
-                    self.add_listener(member, name)
-            try:
-                super().load_extension(f'{path}{cog}')
-            except Exception as e:
-                print(f'LoadError: {cog}\n{type(e).__name__}: {e}')
     
     ## Bot related commands ##
 
-    
-        
-if __name__ == "__main__":
-    bot = SoupBot()
-    bot.run(bot.token)
 
 
     
